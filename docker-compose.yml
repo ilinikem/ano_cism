@@ -1,0 +1,75 @@
+version: "3.12"
+
+services:
+  db:
+    image: postgres:15
+    container_name: postgres_db
+    restart: always
+    environment:
+        - ENVIRONMENT=prod
+        - POSTGRES_USER=${DB_USER}
+        - POSTGRES_PASSWORD=${DB_PASSWORD}
+        - POSTGRES_DB=${DB_NAME}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: fastapi_app
+    depends_on:
+      - db
+      - rabbitmq
+    environment:
+      - ENVIRONMENT=prod
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    command: >
+      bash -c "
+      until pg_isready -h db -p 5432; do
+        echo 'Waiting for Postgres...';
+        sleep 1;
+      done &&
+      alembic upgrade head &&
+      uvicorn app.main:app --host 0.0.0.0 --port 8000
+      "
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: task_worker
+    depends_on:
+      - db
+      - rabbitmq
+    environment:
+      - ENVIRONMENT=prod
+      - PYTHONPATH=/app
+    volumes:
+      - .:/app
+    command: >
+      bash -c "
+      until nc -z rabbitmq 5672; do
+        echo 'Waiting for RabbitMQ...'
+        sleep 2
+      done;
+      python app/worker.py
+      "
+
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    depends_on:
+      - db
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+volumes:
+  postgres_data:
